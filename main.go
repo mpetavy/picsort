@@ -9,21 +9,32 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync"
+	"time"
 )
 
+type registry = map[string]string
+
 var (
-	input  common.MultiValueFlag
+	inputs common.MultiValueFlag
 	output = flag.String("o", "", "output path")
 
-	pics     = make(map[string]string)
-	syncPics = common.NewSyncOf(pics)
+	target = make(registry)
+	mu     sync.RWMutex
 )
 
 func init() {
 	common.Init("picsort", "", "", "", "2023", "picsort", "mpetavy", fmt.Sprintf("https://github.com/mpetavy/%s", common.Title()), common.APACHE, nil, nil, nil, run, 0)
 
-	flag.Var(&input, "i", "directory to include")
+	flag.Var(&inputs, "i", "input directory to scan")
+}
+
+func synchronize(fn func() error) error {
+	mu.Lock()
+	defer mu.Unlock()
+
+	return fn()
 }
 
 func md5(path string) ([]byte, error) {
@@ -46,16 +57,21 @@ func md5(path string) ([]byte, error) {
 	return hash.Sum(nil), nil
 }
 
-func run() error {
+func dateOf(path string, fi os.FileInfo) (time.Time, error) {
+	return fi.ModTime(), nil
+}
+
+func process(path string, fn func(path string, fi os.FileInfo, hash string) error) error {
 	wg := sync.WaitGroup{}
-	err := common.WalkFiles(filepath.Join(common.CleanPath(*output), "*.jpg"), true, true, func(path string, fi os.FileInfo) error {
-		if common.IsDirectory(path) {
+
+	err := common.WalkFiles(path, true, false, func(path string, fi os.FileInfo) error {
+		if fi.IsDir() {
 			return nil
 		}
 
 		wg.Add(1)
 
-		go func(path string) {
+		go func(path string, fi os.FileInfo) {
 			defer func() {
 				wg.Done()
 			}()
@@ -65,19 +81,13 @@ func run() error {
 				return
 			}
 
-			syncPics.Run(func(m map[string]string) {
-				hash := hex.EncodeToString(md5)
+			hash := hex.EncodeToString(md5)
 
-				existingPath, ok := pics[hash]
-				if ok {
-					common.Warn("duplicate found: %s -> %s", existingPath, path)
-
-					return
-				}
-
-				m[hash] = path
-			})
-		}(path)
+			err = fn(path, fi, hash)
+			if common.Error(err) {
+				return
+			}
+		}(path, fi)
 
 		return nil
 	})
@@ -87,17 +97,85 @@ func run() error {
 
 	wg.Wait()
 
-	for hash, path := range pics {
-		fmt.Printf("%s: %s\n", hash, path)
+	return nil
+}
+
+func copyFile(source string, fi os.FileInfo, dest string) error {
+	common.Info("copy file: %s -> %s", source, dest)
+
+	err := common.FileCopy(source, dest)
+	if common.Error(err) {
+		return err
 	}
 
-	//for _, path := range input {
-	//	common.WalkFiles(filepath.Join(common.CleanPath(path), "*.jpg"), true, true, func(path string, fi os.FileInfo) error {
-	//		fmt.Printf("%s\n", path)
-	//
-	//		return nil
-	//	})
-	//}
+	err = os.Chtimes(dest, fi.ModTime(), fi.ModTime())
+	if common.Error(err) {
+		return err
+	}
+
+	return nil
+}
+
+func run() error {
+	err := process(common.CleanPath(*output), func(path string, fi os.FileInfo, hash string) error {
+		err := synchronize(func() error {
+			found, ok := target[hash]
+			if ok {
+				return fmt.Errorf("duplicate found: %s -> %s", found, path)
+			}
+
+			target[hash] = path
+
+			return nil
+		})
+		if common.WarnError(err) {
+			return nil
+		}
+
+		return nil
+	})
+	if common.Error(err) {
+		return err
+	}
+
+	for _, input := range inputs {
+		err := process(common.CleanPath(input), func(path string, fi os.FileInfo, hash string) error {
+			date, err := dateOf(path, fi)
+			if common.Error(err) {
+				return err
+			}
+
+			targetDir := filepath.Join(*output, strconv.Itoa(date.Year()), strconv.Itoa(int(date.Month())))
+			targetFile := filepath.Join(targetDir, filepath.Base(path))
+
+			err = synchronize(func() error {
+				found, ok := target[hash]
+				if ok {
+					return fmt.Errorf("duplicate found: %s -> %s", found, path)
+				}
+
+				target[hash] = targetFile
+
+				return nil
+			})
+
+			if common.WarnError(err) {
+				return nil
+			}
+
+			os.MkdirAll(targetDir, os.ModePerm)
+
+			err = copyFile(path, fi, targetFile)
+			if common.Error(err) {
+				return err
+			}
+
+			return nil
+		})
+		if common.Error(err) {
+			return err
+		}
+	}
 
 	return nil
 }
