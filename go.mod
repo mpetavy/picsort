@@ -2,6 +2,8 @@ module picsort
 
 go 1.21.3
 
+require github.com/mpetavy/common v1.6.24
+
 require (
 	cloud.google.com/go v0.110.2 // indirect
 	cloud.google.com/go/compute v1.19.2 // indirect
@@ -37,7 +39,6 @@ require (
 	github.com/labstack/gommon v0.4.0 // indirect
 	github.com/mattn/go-colorable v0.1.13 // indirect
 	github.com/mattn/go-isatty v0.0.18 // indirect
-	github.com/mpetavy/common v1.6.23 // indirect
 	github.com/ompluscator/dynamic-struct v1.4.0 // indirect
 	github.com/paulrosania/go-charset v0.0.0-20190326053356-55c9d7a5834c // indirect
 	github.com/quasoft/memstore v0.0.0-20191010062613-2bce066d2b0b // indirect
