@@ -9,19 +9,27 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"sync"
 	"time"
 )
 
-type registry = map[string]string
+type RegistryInfo struct {
+	Path     string
+	Date     time.Time
+	DateFrom string
+}
+type Registry = map[string]RegistryInfo
 
 var (
-	inputs common.MultiValueFlag
-	output = flag.String("o", "", "output path")
-
-	target = make(registry)
-	mu     sync.RWMutex
+	inputs             common.MultiValueFlag
+	output             = flag.String("o", "", "output path")
+	dry                = flag.Bool("d", true, "run dry")
+	registry           = make(Registry)
+	mu                 sync.RWMutex
+	regexNumberPattern = "\\d+"
+	regexNumber        *regexp.Regexp
 )
 
 func init() {
@@ -57,8 +65,29 @@ func md5(path string) ([]byte, error) {
 	return hash.Sum(nil), nil
 }
 
-func dateOf(path string, fi os.FileInfo) (time.Time, error) {
+func dateOfFile(path string, fi os.FileInfo) (time.Time, error) {
 	return fi.ModTime(), nil
+}
+
+func parseDate(str string) (time.Time, error) {
+	founds := regexNumber.FindAllString(str, -1)
+
+	for _, found := range founds {
+		if len(found) != 8 {
+			continue
+		}
+
+		t, err := time.Parse(common.Year+common.Month+common.Day, found)
+		if common.DebugError(err) {
+			continue
+		}
+
+		if t.Year() >= 1900 && t.Year() <= time.Now().Year() {
+			return t, nil
+		}
+	}
+
+	return time.Time{}, fmt.Errorf("cannot find date")
 }
 
 func process(path string, fn func(path string, fi os.FileInfo, hash string) error) error {
@@ -117,14 +146,23 @@ func copyFile(source string, fi os.FileInfo, dest string) error {
 }
 
 func run() error {
-	err := process(common.CleanPath(*output), func(path string, fi os.FileInfo, hash string) error {
+	var err error
+
+	regexNumber, err = regexp.Compile(regexNumberPattern)
+	if common.Error(err) {
+		return err
+	}
+
+	err = process(common.CleanPath(*output), func(path string, fi os.FileInfo, hash string) error {
 		err := synchronize(func() error {
-			found, ok := target[hash]
+			found, ok := registry[hash]
 			if ok {
 				return fmt.Errorf("duplicate found: %s -> %s", found, path)
 			}
 
-			target[hash] = path
+			registry[hash] = RegistryInfo{
+				Path: path,
+			}
 
 			return nil
 		})
@@ -140,21 +178,32 @@ func run() error {
 
 	for _, input := range inputs {
 		err := process(common.CleanPath(input), func(path string, fi os.FileInfo, hash string) error {
-			date, err := dateOf(path, fi)
-			if common.Error(err) {
-				return err
+			dateFrom := "Filename"
+			date, err := parseDate(filepath.Base(path))
+			if common.DebugError(err) {
+				date, err = dateOfFile(path, fi)
+				if common.DebugError(err) {
+					return err
+				}
+				dateFrom = "Last modified"
 			}
 
 			targetDir := filepath.Join(*output, strconv.Itoa(date.Year()), strconv.Itoa(int(date.Month())))
 			targetFile := filepath.Join(targetDir, filepath.Base(path))
 
 			err = synchronize(func() error {
-				found, ok := target[hash]
+				found, ok := registry[hash]
 				if ok {
 					return fmt.Errorf("duplicate found: %s -> %s", found, path)
 				}
 
-				target[hash] = targetFile
+				registry[hash] = RegistryInfo{
+					Path:     targetFile,
+					Date:     date,
+					DateFrom: dateFrom,
+				}
+
+				common.Info("%s [%v][%s]\n", path, date, dateFrom)
 
 				return nil
 			})
@@ -163,11 +212,13 @@ func run() error {
 				return nil
 			}
 
-			os.MkdirAll(targetDir, os.ModePerm)
+			if !*dry {
+				os.MkdirAll(targetDir, os.ModePerm)
 
-			err = copyFile(path, fi, targetFile)
-			if common.Error(err) {
-				return err
+				err = copyFile(path, fi, targetFile)
+				if common.Error(err) {
+					return err
+				}
 			}
 
 			return nil
@@ -181,5 +232,5 @@ func run() error {
 }
 
 func main() {
-	common.Run(nil)
+	common.Run([]string{"i", "o"})
 }
