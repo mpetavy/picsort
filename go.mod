@@ -2,7 +2,10 @@ module picsort
 
 go 1.21.3
 
-require github.com/mpetavy/common v1.6.27
+require (
+	github.com/evanoberholster/imagemeta v0.3.1
+	github.com/mpetavy/common v1.6.27
+)
 
 require (
 	cloud.google.com/go v0.110.2 // indirect
@@ -41,7 +44,11 @@ require (
 	github.com/mattn/go-isatty v0.0.18 // indirect
 	github.com/ompluscator/dynamic-struct v1.4.0 // indirect
 	github.com/paulrosania/go-charset v0.0.0-20190326053356-55c9d7a5834c // indirect
+	github.com/philhofer/fwd v1.1.2 // indirect
+	github.com/pkg/errors v0.9.1 // indirect
 	github.com/quasoft/memstore v0.0.0-20191010062613-2bce066d2b0b // indirect
+	github.com/rs/zerolog v1.29.0 // indirect
+	github.com/tinylib/msgp v1.1.8 // indirect
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
 	github.com/valyala/fasttemplate v1.2.2 // indirect
 	go.bug.st/serial v1.5.0 // indirect

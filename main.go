@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"flag"
 	"fmt"
+	"github.com/evanoberholster/imagemeta"
 	"github.com/mpetavy/common"
 	"io"
 	"os"
@@ -64,10 +65,6 @@ func md5(path string) ([]byte, error) {
 	}
 
 	return hash.Sum(nil), nil
-}
-
-func dateOfFile(path string, fi os.FileInfo) (time.Time, error) {
-	return fi.ModTime(), nil
 }
 
 func parseDate(str string) (time.Time, error) {
@@ -145,6 +142,23 @@ func process(path string, fn func(path string, fi os.FileInfo, hash string) erro
 	return nil
 }
 
+func getExif(path string) (time.Time, error) {
+	f, err := os.Open(path)
+	if common.Error(err) {
+		return time.Time{}, err
+	}
+	defer func() {
+		common.Error(f.Close())
+	}()
+
+	e, err := imagemeta.Decode(f)
+	if common.Error(err) {
+		return time.Time{}, err
+	}
+
+	return e.CreateDate(), nil
+}
+
 func run() error {
 	var err error
 
@@ -178,11 +192,15 @@ func run() error {
 
 	for _, input := range inputs {
 		err := process(common.CleanPath(input), func(path string, fi os.FileInfo, hash string) error {
-			dateFrom := "Filename"
-			date, err := parseDate(filepath.Base(path))
+			dateFrom := "Exif"
+			date, err := getExif(path)
 			if common.DebugError(err) {
-				date = fi.ModTime()
-				dateFrom = "Last modified"
+				dateFrom = "Filename"
+				date, err = parseDate(filepath.Base(path))
+				if common.DebugError(err) {
+					dateFrom = "Last modified"
+					date = fi.ModTime()
+				}
 			}
 
 			targetDir := filepath.Join(*output, strconv.Itoa(date.Year()), strconv.Itoa(int(date.Month())))
