@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -73,16 +74,31 @@ func parseDate(str string) (time.Time, error) {
 	founds := regexNumber.FindAllString(str, -1)
 
 	for _, found := range founds {
-		if len(found) != 8 {
-			continue
+		var t time.Time
+		var err error
+
+		switch len(found) {
+		case 8:
+			t, err = time.Parse(common.Year+common.Month+common.Day, found)
+			if common.DebugError(err) {
+				continue
+			}
+		case 10:
+			switch {
+			case strings.Contains(found, "/"):
+				t, err = time.Parse(common.Month+"/"+common.Day+"/"+common.Year, found)
+				if common.DebugError(err) {
+					continue
+				}
+			case strings.Contains(found, "."):
+				t, err = time.Parse(common.Day+"."+common.Month+"."+common.Year, found)
+				if common.DebugError(err) {
+					continue
+				}
+			}
 		}
 
-		t, err := time.Parse(common.Year+common.Month+common.Day, found)
-		if common.DebugError(err) {
-			continue
-		}
-
-		if t.Year() >= 1900 && t.Year() <= time.Now().Year() {
+		if !t.IsZero() && t.Year() >= 1900 && t.Year() <= time.Now().Year() {
 			return t, nil
 		}
 	}
@@ -129,22 +145,6 @@ func process(path string, fn func(path string, fi os.FileInfo, hash string) erro
 	return nil
 }
 
-func copyFile(source string, fi os.FileInfo, dest string) error {
-	common.Info("copy file: %s -> %s", source, dest)
-
-	err := common.FileCopy(source, dest)
-	if common.Error(err) {
-		return err
-	}
-
-	err = os.Chtimes(dest, fi.ModTime(), fi.ModTime())
-	if common.Error(err) {
-		return err
-	}
-
-	return nil
-}
-
 func run() error {
 	var err error
 
@@ -181,10 +181,7 @@ func run() error {
 			dateFrom := "Filename"
 			date, err := parseDate(filepath.Base(path))
 			if common.DebugError(err) {
-				date, err = dateOfFile(path, fi)
-				if common.DebugError(err) {
-					return err
-				}
+				date = fi.ModTime()
 				dateFrom = "Last modified"
 			}
 
@@ -213,9 +210,9 @@ func run() error {
 			}
 
 			if !*dry {
-				os.MkdirAll(targetDir, os.ModePerm)
+				common.IgnoreError(os.MkdirAll(targetDir, os.ModePerm))
 
-				err = copyFile(path, fi, targetFile)
+				err = common.FileCopy(path, targetFile)
 				if common.Error(err) {
 					return err
 				}
