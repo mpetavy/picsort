@@ -4,7 +4,7 @@ go 1.21.3
 
 require (
 	github.com/evanoberholster/imagemeta v0.3.1
-	github.com/mpetavy/common v1.6.27
+	github.com/mpetavy/common v1.6.28
 )
 
 require (
@@ -67,3 +67,5 @@ require (
 	google.golang.org/protobuf v1.30.0 // indirect
 	software.sslmate.com/src/go-pkcs12 v0.2.0 // indirect
 )
+
+//replace github.com/mpetavy/common => ../common
