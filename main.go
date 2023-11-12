@@ -27,7 +27,6 @@ type Registry = map[string]RegistryInfo
 var (
 	inputs             common.MultiValueFlag
 	output             = flag.String("o", "", "output path")
-	dry                = flag.Bool("d", true, "run dry")
 	registry           = make(Registry)
 	mu                 sync.RWMutex
 	regexNumberPattern = "\\d+"
@@ -47,27 +46,37 @@ func synchronize(fn func() error) error {
 	return fn()
 }
 
-func md5(path string) ([]byte, error) {
-	hash := crypto.MD5.New()
+func md5(path string) (string, error) {
+	common.DebugFunc(path)
+
+	md5 := crypto.MD5.New()
 
 	f, err := os.Open(path)
 	if common.Error(err) {
-		return nil, err
+		return "", err
 	}
 
 	defer func() {
 		common.Error(f.Close())
 	}()
 
-	_, err = io.Copy(hash, f)
+	_, err = io.Copy(md5, f)
 	if common.Error(err) {
-		return nil, err
+		return "", err
 	}
 
-	return hash.Sum(nil), nil
+	fingerprint := md5.Sum(nil)
+
+	hash := hex.EncodeToString(fingerprint)
+
+	common.DebugFunc("%s: %s", path, hash)
+
+	return hash, nil
 }
 
-func parseDate(str string) (time.Time, error) {
+func stringDate(str string) (time.Time, error) {
+	common.DebugFunc(str)
+
 	founds := regexNumber.FindAllString(str, -1)
 
 	for _, found := range founds {
@@ -96,6 +105,8 @@ func parseDate(str string) (time.Time, error) {
 		}
 
 		if !t.IsZero() && t.Year() >= 1900 && t.Year() <= time.Now().Year() {
+			common.DebugFunc("$s: %v", str, t)
+
 			return t, nil
 		}
 	}
@@ -114,16 +125,16 @@ func process(path string, fn func(path string, fi os.FileInfo, hash string) erro
 		wg.Add(1)
 
 		go func(path string, fi os.FileInfo) {
+			common.DebugFunc(path)
+
 			defer func() {
 				wg.Done()
 			}()
 
-			md5, err := md5(path)
+			hash, err := md5(path)
 			if common.Error(err) {
 				return
 			}
-
-			hash := hex.EncodeToString(md5)
 
 			err = fn(path, fi, hash)
 			if common.Error(err) {
@@ -142,7 +153,7 @@ func process(path string, fn func(path string, fi os.FileInfo, hash string) erro
 	return nil
 }
 
-func getExif(path string) (time.Time, error) {
+func exifDate(path string) (time.Time, error) {
 	f, err := os.Open(path)
 	if common.Error(err) {
 		return time.Time{}, err
@@ -193,14 +204,22 @@ func run() error {
 	for _, input := range inputs {
 		err := process(common.CleanPath(input), func(path string, fi os.FileInfo, hash string) error {
 			dateFrom := "Exif"
-			date, err := getExif(path)
+			date, err := exifDate(path)
 			if common.DebugError(err) {
 				dateFrom = "Filename"
-				date, err = parseDate(filepath.Base(path))
+				date, err = stringDate(filepath.Base(path))
 				if common.DebugError(err) {
 					dateFrom = "Last modified"
 					date = fi.ModTime()
 				}
+			}
+
+			if date != fi.ModTime() {
+				common.Warn("possible wrong date: %s file %v found %v [%s]", path, fi.ModTime().Format(common.SortedDateMask), date.Format(common.SortedDateMask), dateFrom)
+			}
+
+			if *output == "" {
+				return nil
 			}
 
 			targetDir := filepath.Join(*output, strconv.Itoa(date.Year()), strconv.Itoa(int(date.Month())))
@@ -227,13 +246,11 @@ func run() error {
 				return nil
 			}
 
-			if !*dry {
-				common.IgnoreError(os.MkdirAll(targetDir, os.ModePerm))
+			common.IgnoreError(os.MkdirAll(targetDir, os.ModePerm))
 
-				err = common.FileCopy(path, targetFile)
-				if common.Error(err) {
-					return err
-				}
+			err = common.FileCopy(path, targetFile)
+			if common.Error(err) {
+				return err
 			}
 
 			return nil
@@ -247,5 +264,5 @@ func run() error {
 }
 
 func main() {
-	common.Run([]string{"i", "o"})
+	common.Run([]string{"i"})
 }
