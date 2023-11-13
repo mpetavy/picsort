@@ -170,15 +170,12 @@ func exifDate(path string) (time.Time, error) {
 	return e.CreateDate(), nil
 }
 
-func run() error {
-	var err error
-
-	regexNumber, err = regexp.Compile(regexNumberPattern)
-	if common.Error(err) {
-		return err
+func scanOutput() error {
+	if *output == "" {
+		return nil
 	}
 
-	err = process(common.CleanPath(*output), func(path string, fi os.FileInfo, hash string) error {
+	err := process(common.CleanPath(*output), func(path string, fi os.FileInfo, hash string) error {
 		err := synchronize(func() error {
 			found, ok := registry[hash]
 			if ok {
@@ -201,11 +198,15 @@ func run() error {
 		return err
 	}
 
+	return err
+}
+
+func scanInputs() error {
 	for _, input := range inputs {
 		err := process(common.CleanPath(input), func(path string, fi os.FileInfo, hash string) error {
 			dateFrom := "Exif"
 			date, err := exifDate(path)
-			if common.DebugError(err) {
+			if date.IsZero() || common.DebugError(err) {
 				dateFrom = "Filename"
 				date, err = stringDate(filepath.Base(path))
 				if common.DebugError(err) {
@@ -214,8 +215,11 @@ func run() error {
 				}
 			}
 
-			if date != fi.ModTime() {
-				common.Warn("possible wrong date: %s file %v found %v [%s]", path, fi.ModTime().Format(common.SortedDateMask), date.Format(common.SortedDateMask), dateFrom)
+			date = date.In(time.UTC).Truncate(time.Second)
+			modtime := fi.ModTime().In(time.UTC).Truncate(time.Second)
+
+			if date != modtime {
+				common.Warn("possible wrong date: %s\n\tfile\t%v\n\tfound\t%v [%s]", path, modtime, date, dateFrom)
 			}
 
 			if *output == "" {
@@ -258,6 +262,27 @@ func run() error {
 		if common.Error(err) {
 			return err
 		}
+	}
+
+	return nil
+}
+
+func run() error {
+	var err error
+
+	regexNumber, err = regexp.Compile(regexNumberPattern)
+	if common.Error(err) {
+		return err
+	}
+
+	err = scanOutput()
+	if common.Error(err) {
+		return err
+	}
+
+	err = scanInputs()
+	if common.Error(err) {
+		return err
 	}
 
 	return nil
