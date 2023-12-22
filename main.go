@@ -2,6 +2,7 @@ package main
 
 import (
 	"crypto"
+	"embed"
 	"encoding/hex"
 	"flag"
 	"fmt"
@@ -33,8 +34,11 @@ var (
 	regexNumber        *regexp.Regexp
 )
 
+//go:embed go.mod
+var resources embed.FS
+
 func init() {
-	common.Init("picsort", "", "", "", "2023", "picsort", "mpetavy", fmt.Sprintf("https://github.com/mpetavy/%s", common.Title()), common.APACHE, nil, nil, nil, run, 0)
+	common.Init("", "", "", "", "picsort", "", "", "", &resources, nil, nil, run, 0)
 
 	flag.Var(&inputs, "i", "input directory to scan")
 }
