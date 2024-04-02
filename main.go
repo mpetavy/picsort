@@ -18,18 +18,31 @@ import (
 	"time"
 )
 
-type RegistryInfo struct {
+const (
+	EXIF          = "Exif"
+	FILENAME      = "Filename"
+	LAST_MODIFIED = "Last modified"
+)
+
+type Info struct {
 	Path     string
 	Date     time.Time
 	DateFrom string
 }
-type Registry = map[string]RegistryInfo
+
+type Registry struct {
+	Files map[string]Info
+	sync.RWMutex
+}
 
 var (
-	inputs             common.MultiValueFlag
-	output             = flag.String("o", "", "output path")
-	registry           = make(Registry)
-	mu                 sync.RWMutex
+	inputs   common.MultiValueFlag
+	output   = flag.String("o", "", "output path")
+	minsize  = flag.Int64("minsize", 100*1024, "minimum file length")
+	registry = Registry{
+		Files:   make(map[string]Info),
+		RWMutex: sync.RWMutex{},
+	}
 	regexNumberPattern = "\\d+"
 	regexNumber        *regexp.Regexp
 )
@@ -41,13 +54,6 @@ func init() {
 	common.Init("", "", "", "", "picsort", "", "", "", &resources, nil, nil, run, 0)
 
 	flag.Var(&inputs, "i", "input directory to scan")
-}
-
-func synchronize(fn func() error) error {
-	mu.Lock()
-	defer mu.Unlock()
-
-	return fn()
 }
 
 func md5(path string) (string, error) {
@@ -118,45 +124,6 @@ func stringDate(str string) (time.Time, error) {
 	return time.Time{}, fmt.Errorf("cannot find date")
 }
 
-func process(path string, fn func(path string, fi os.FileInfo, hash string) error) error {
-	wg := sync.WaitGroup{}
-
-	err := common.WalkFiles(path, true, false, func(path string, fi os.FileInfo) error {
-		if fi.IsDir() {
-			return nil
-		}
-
-		wg.Add(1)
-
-		go func(path string, fi os.FileInfo) {
-			common.DebugFunc(path)
-
-			defer func() {
-				wg.Done()
-			}()
-
-			hash, err := md5(path)
-			if common.Error(err) {
-				return
-			}
-
-			err = fn(path, fi, hash)
-			if common.Error(err) {
-				return
-			}
-		}(path, fi)
-
-		return nil
-	})
-	if common.Error(err) {
-		return err
-	}
-
-	wg.Wait()
-
-	return nil
-}
-
 func exifDate(path string) (time.Time, error) {
 	f, err := os.Open(path)
 	if common.Error(err) {
@@ -174,98 +141,119 @@ func exifDate(path string) (time.Time, error) {
 	return e.CreateDate(), nil
 }
 
-func scanOutput() error {
+func processFile(path string, fi os.FileInfo) error {
+	common.DebugFunc(path)
+
+	hash, err := md5(path)
+	if common.Error(err) {
+		return err
+	}
+
+	dateSource := LAST_MODIFIED
+	date := fi.ModTime()
+
+	if strings.HasSuffix(strings.ToLower(path), ".jpg") || strings.HasSuffix(strings.ToLower(path), ".jpeg") {
+		dateSource = EXIF
+		date, err := exifDate(path)
+		if date.IsZero() || common.DebugError(err) {
+			dateSource = FILENAME
+			date, err = stringDate(filepath.Base(path))
+			if common.DebugError(err) {
+				dateSource = LAST_MODIFIED
+				date = fi.ModTime()
+			}
+		}
+	}
+
+	common.Info("%s [%v][%s]\n", path, date, dateSource)
+
+	//return nil
+
+	registry.RLock()
+
+	found, ok := registry.Files[hash]
+	if ok {
+		registry.RUnlock()
+
+		common.Info(fmt.Sprintf("duplicate found: %s -> %s", found, path))
+
+		return nil
+	}
+
+	registry.RUnlock()
+
 	if *output == "" {
 		return nil
 	}
 
-	err := process(common.CleanPath(*output), func(path string, fi os.FileInfo, hash string) error {
-		err := synchronize(func() error {
-			found, ok := registry[hash]
-			if ok {
-				return fmt.Errorf("duplicate found: %s -> %s", found, path)
-			}
+	registry.Lock()
 
-			registry[hash] = RegistryInfo{
-				Path: path,
-			}
+	_, ok = registry.Files[hash]
+	if ok {
+		registry.Unlock()
 
-			return nil
-		})
-		if common.WarnError(err) {
+		return nil
+	}
+
+	defer func() {
+		registry.Unlock()
+	}()
+
+	targetDir := filepath.Join(*output, strconv.Itoa(date.Year()), strconv.Itoa(int(date.Month())))
+	_, filename := filepath.Split(path)
+	targetFile := filepath.Join(targetDir, filename)
+	//targetFile := filepath.Join(targetDir, fmt.Sprintf("image-%s", date.Format(common.SortedDateMask+common.Separator+common.TimeMask)))
+
+	err = os.MkdirAll(targetDir, os.ModePerm)
+	if common.Error(err) {
+		return err
+	}
+
+	err = common.FileCopy(path, targetFile)
+	if common.Error(err) {
+		return err
+	}
+
+	if dateSource == EXIF {
+		err = os.Chtimes(targetFile, date, date)
+		if common.Error(err) {
+			return err
+		}
+	}
+
+	registry.Files[hash] = Info{
+		Path:     targetFile,
+		Date:     date,
+		DateFrom: dateSource,
+	}
+
+	common.Info("%s [%v][%s]\n", path, date, dateSource)
+
+	return nil
+}
+
+func processDir(wg *sync.WaitGroup, dir string) error {
+	err := common.WalkFiles(dir, true, true, func(path string, fi os.FileInfo) error {
+		if fi.IsDir() {
 			return nil
 		}
+
+		if fi.Size() < *minsize {
+			return nil
+		}
+
+		wg.Add(1)
+
+		go func() {
+			defer wg.Done()
+
+			common.Error(processFile(path, fi))
+		}()
 
 		return nil
 	})
 	if common.Error(err) {
 		return err
-	}
-
-	return err
-}
-
-func scanInputs() error {
-	for _, input := range inputs {
-		err := process(common.CleanPath(input), func(path string, fi os.FileInfo, hash string) error {
-			dateFrom := "Exif"
-			date, err := exifDate(path)
-			if date.IsZero() || common.DebugError(err) {
-				dateFrom = "Filename"
-				date, err = stringDate(filepath.Base(path))
-				if common.DebugError(err) {
-					dateFrom = "Last modified"
-					date = fi.ModTime()
-				}
-			}
-
-			date = date.In(time.UTC).Truncate(time.Second)
-			modtime := fi.ModTime().In(time.UTC).Truncate(time.Second)
-
-			if date != modtime {
-				common.Warn("possible wrong date: %s\n\tfile\t%v\n\tfound\t%v [%s]", path, modtime, date, dateFrom)
-			}
-
-			if *output == "" {
-				return nil
-			}
-
-			targetDir := filepath.Join(*output, strconv.Itoa(date.Year()), strconv.Itoa(int(date.Month())))
-			targetFile := filepath.Join(targetDir, filepath.Base(path))
-
-			err = synchronize(func() error {
-				found, ok := registry[hash]
-				if ok {
-					return fmt.Errorf("duplicate found: %s -> %s", found, path)
-				}
-
-				registry[hash] = RegistryInfo{
-					Path:     targetFile,
-					Date:     date,
-					DateFrom: dateFrom,
-				}
-
-				common.Info("%s [%v][%s]\n", path, date, dateFrom)
-
-				return nil
-			})
-
-			if common.WarnError(err) {
-				return nil
-			}
-
-			common.IgnoreError(os.MkdirAll(targetDir, os.ModePerm))
-
-			err = common.FileCopy(path, targetFile)
-			if common.Error(err) {
-				return err
-			}
-
-			return nil
-		})
-		if common.Error(err) {
-			return err
-		}
 	}
 
 	return nil
@@ -279,15 +267,29 @@ func run() error {
 		return err
 	}
 
-	err = scanOutput()
-	if common.Error(err) {
-		return err
+	wg := sync.WaitGroup{}
+
+	if *output != "" {
+		common.Info("scan output: %s", *output)
+
+		err := processDir(&wg, *output)
+		if common.Error(err) {
+			return err
+		}
 	}
 
-	err = scanInputs()
-	if common.Error(err) {
-		return err
+	wg.Wait()
+
+	for _, input := range inputs {
+		common.Info("scan input: %s", input)
+
+		err := processDir(&wg, input)
+		if common.Error(err) {
+			return err
+		}
 	}
+
+	wg.Wait()
 
 	return nil
 }
