@@ -144,6 +144,14 @@ func exifDate(path string) (time.Time, error) {
 func processFile(path string, fi os.FileInfo) error {
 	common.DebugFunc(path)
 
+	filename := strings.ToLower(filepath.Base(path))
+	isImage := strings.HasSuffix(filename, ".jpg") || strings.HasSuffix(filename, ".jpeg")
+	isVideo := strings.HasSuffix(filename, ".mp4")
+
+	if !isImage && !isVideo {
+		return nil
+	}
+
 	hash, err := md5(path)
 	if common.Error(err) {
 		return err
@@ -152,7 +160,7 @@ func processFile(path string, fi os.FileInfo) error {
 	dateSource := LAST_MODIFIED
 	date := fi.ModTime()
 
-	if strings.HasSuffix(strings.ToLower(path), ".jpg") || strings.HasSuffix(strings.ToLower(path), ".jpeg") {
+	if isImage {
 		dateSource = EXIF
 		date, err := exifDate(path)
 		if date.IsZero() || common.DebugError(err) {
@@ -199,12 +207,16 @@ func processFile(path string, fi os.FileInfo) error {
 		registry.Unlock()
 	}()
 
-	targetDir := filepath.Join(*output, strconv.Itoa(date.Year()), strconv.Itoa(int(date.Month())))
-	_, filename := filepath.Split(path)
-	targetFile := filepath.Join(targetDir, filename)
-	//targetFile := filepath.Join(targetDir, fmt.Sprintf("image-%s", date.Format(common.SortedDateMask+common.Separator+common.TimeMask)))
+	ext := "jpg"
+	media := "image"
+	if isVideo {
+		media = "video"
+		ext = "mp4"
+	}
 
-	err = os.MkdirAll(targetDir, os.ModePerm)
+	targetFile := filepath.Join(*output, media, strconv.Itoa(date.Year()), strconv.Itoa(int(date.Month())), fmt.Sprintf("%s-%s.%s", media, date.Format(common.SortedDateMask+common.Separator+common.TimeMask), ext))
+
+	err = os.MkdirAll(filepath.Dir(targetFile), os.ModePerm)
 	if common.Error(err) {
 		return err
 	}
