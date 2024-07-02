@@ -257,6 +257,8 @@ func processDir(wg *sync.WaitGroup, dir string) error {
 		wg.Add(1)
 
 		go func() {
+			defer common.UnregisterGoRoutine(common.RegisterGoRoutine(1))
+
 			defer wg.Done()
 
 			common.Error(processFile(path, fi))
