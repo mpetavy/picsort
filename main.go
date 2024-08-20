@@ -216,7 +216,7 @@ func processFile(path string, fi os.FileInfo) error {
 
 	targetFile := filepath.Join(*output, media, strconv.Itoa(date.Year()), strconv.Itoa(int(date.Month())), fmt.Sprintf("%s-%s.%s", media, date.Format(common.SortedDateMask+common.Separator+common.TimeMask), ext))
 
-	err = os.MkdirAll(filepath.Dir(targetFile), os.ModePerm)
+	err = os.MkdirAll(filepath.Dir(targetFile), common.DefaultDirMode)
 	if common.Error(err) {
 		return err
 	}
