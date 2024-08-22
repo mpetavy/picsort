@@ -4,7 +4,7 @@ go 1.21.3
 
 require (
 	github.com/evanoberholster/imagemeta v0.3.1
-	github.com/mpetavy/common v1.8.63
+	github.com/mpetavy/common v1.8.64
 )
 
 require (
