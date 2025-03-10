@@ -6,7 +6,7 @@ toolchain go1.23.2
 
 require (
 	github.com/evanoberholster/imagemeta v0.3.1
-	github.com/mpetavy/common v1.9.93
+	github.com/mpetavy/common v1.9.94
 )
 
 require (
